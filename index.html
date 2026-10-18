@@ -61,7 +61,7 @@
     border:1px solid var(--border);
     border-radius:8px;
     font-size:14px;
-    color:var(--text-dark) !important; /* FIX: force black typed/selected text everywhere */
+    color:var(--text-dark) !important;
     background:#fff;
     outline:none;
     font-family:inherit;
@@ -87,9 +87,7 @@
     background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='9'><path d='M1 1l6 6 6-6' stroke='%232b2e6f' stroke-width='1.6' fill='none' fill-rule='evenodd' stroke-linecap='round' stroke-linejoin='round'/></svg>");
     background-repeat:no-repeat;
     background-position:right 14px center;
-    /* FIX: no more teal-by-default; color rule above already forces black */
   }
-  /* Style just the "Select..." placeholder option a bit lighter, purely cosmetic */
   select option[value=""]{
     color:#8a8a8a;
   }
@@ -169,14 +167,15 @@
 
   <div class="error-msg" id="errorMsg">Please fill in all required fields.</div>
 
-  <!--
-    HIDDEN PRODUCT FIELD
-    This travels with every submission to Formspree (so it shows up in your
-    email/backend), but it is never rendered on the page, so the customer
-    never sees it. Just change the value to whatever product/SKU/offer name
-    you want tagged on this particular landing page.
-  -->
+  <!-- HIDDEN PRODUCT FIELD: sent with every submission, never shown to the customer -->
   <input type="hidden" name="Product Name" value="LivT-55 2">
+
+  <!-- WEB3FORMS SETTINGS -->
+  <input type="hidden" name="access_key" value="eba9007d-254b-467d-b48b-d1e7e2bef28c">
+  <input type="hidden" name="subject" value="New Order - LivT-55">
+  <input type="hidden" name="from_name" value="Order Form">
+  <!-- Spam trap: bots fill this in, humans never see it -->
+  <input type="checkbox" name="botcheck" style="display:none" tabindex="-1" autocomplete="off">
 
   <div class="field">
     <label for="fullName">Full Name</label>
@@ -194,7 +193,7 @@
     <label for="whatsapp">WhatsApp Number</label>
     <input type="tel" id="whatsapp" name="WhatsApp Number" placeholder="Your WhatsApp Number"
            inputmode="numeric" pattern="[0-9]{11}" maxlength="11"
-           title="Enter an 11-digit WhatsApp number" >
+           title="Enter an 11-digit WhatsApp number">
   </div>
 
   <div class="field">
@@ -230,7 +229,6 @@
       <option value="" disabled selected>Select gender...</option>
       <option>Male</option>
       <option>Female</option>
-    
     </select>
   </div>
 
@@ -291,13 +289,7 @@
 </form>
 
 <script>
-  // ====== SETUP: paste your Formspree endpoint below ======
-  // 1. Go to https://formspree.io and create a free account.
-  // 2. Create a new form, it gives you a URL like https://formspree.io/f/xxxxabcd
-  // 3. Paste that URL as the value of FORMSPREE_ENDPOINT below.
-  const FORMSPREE_ENDPOINT = "https://formspree.io/f/maqrzvjr";
-  // ==========================================================
-
+  const WEB3FORMS_ENDPOINT = "https://api.web3forms.com/submit";
   const THANK_YOU_URL = 'https://cmb.bigonhealth.xyz/livt-thank-you/';
 
   const form = document.getElementById('orderForm');
@@ -306,67 +298,72 @@
   const phoneEl = document.getElementById('phone');
   const addressEl = document.getElementById('address');
 
-  let orderSubmitted = false;   // becomes true once a real submit succeeds/queues
-  let abandonSent = false;      // guards against sending the abandoned-cart ping twice
+  let orderSubmitted = false;
+  let abandonSent = false;
 
-  // FIX: this form is meant to be embedded (iframe) inside your landing page.
-  // window.location.href only redirects the iframe itself, not the visible
-  // page, which is why "nothing happened" on submit. This redirects the
-  // TOP browser window instead, with a safe fallback.
+  // Redirect the TOP window (works when the form is inside an iframe)
   function redirectToThankYou() {
     try {
       if (window.top && window.top !== window.self) {
         window.top.location.href = THANK_YOU_URL;
         return;
       }
-    } catch (err) {
-      // Cross-origin framing — can't reach the parent, fall back below.
-    }
+    } catch (err) {}
     window.location.href = THANK_YOU_URL;
   }
 
-  // ---------- Retry queue: resend anything that failed earlier due to network issues ----------
+  // Web3Forms returns JSON with a "success" flag, so check that too
+  async function postToWeb3Forms(formData) {
+    const res = await fetch(WEB3FORMS_ENDPOINT, {
+      method: 'POST',
+      body: formData,
+      headers: { 'Accept': 'application/json' }
+    });
+    let result = {};
+    try { result = await res.json(); } catch (e) {}
+    return res.ok && result.success === true;
+  }
+
+  // ---------- Retry queue ----------
   async function flushPendingOrders() {
     let pending = [];
     try { pending = JSON.parse(localStorage.getItem('pendingOrders') || '[]'); } catch (err) { pending = []; }
-    if (!pending.length || FORMSPREE_ENDPOINT.includes('YOUR_FORM_ID')) return;
+    if (!pending.length) return;
 
     const stillPending = [];
     for (const record of pending) {
       try {
         const fd = new FormData();
         Object.entries(record).forEach(([k, v]) => fd.append(k, v));
-        const res = await fetch(FORMSPREE_ENDPOINT, { method: 'POST', body: fd, headers: { 'Accept': 'application/json' } });
-        if (!res.ok) stillPending.push(record);
+        const ok = await postToWeb3Forms(fd);
+        if (!ok) stillPending.push(record);
       } catch (err) {
-        stillPending.push(record); // still no network, keep for next time
+        stillPending.push(record);
       }
     }
-    localStorage.setItem('pendingOrders', JSON.stringify(stillPending));
+    try { localStorage.setItem('pendingOrders', JSON.stringify(stillPending)); } catch (err) {}
   }
-  flushPendingOrders(); // try on every page load
+  flushPendingOrders();
 
-  // ---------- Abandoned cart recovery: they filled it in but left without submitting ----------
+  // ---------- Abandoned cart recovery ----------
   function sendAbandonedCart() {
     if (orderSubmitted || abandonSent) return;
-    if (FORMSPREE_ENDPOINT.includes('YOUR_FORM_ID')) return;
-    // Only counts as an abandoned lead once they've given at least a valid phone + address
     const phoneOk = phoneEl.value.replace(/\D/g, '').length === 11;
     const addressOk = addressEl.value.trim().length > 0;
     if (!phoneOk || !addressOk) return;
 
     abandonSent = true;
     const data = new FormData(form);
+    data.set('subject', 'Abandoned order form');
     data.append('Status', 'Abandoned Cart - did not complete submission');
-    data.append('_subject', 'Abandoned order form');
-    navigator.sendBeacon(FORMSPREE_ENDPOINT, data);
+    navigator.sendBeacon(WEB3FORMS_ENDPOINT, data);
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') sendAbandonedCart();
   });
   window.addEventListener('pagehide', sendAbandonedCart);
 
-  // Restrict Phone Number and WhatsApp Number to digits only, max 11
+  // Digits only, max 11
   ['phone', 'whatsapp'].forEach(id => {
     const input = document.getElementById(id);
     input.addEventListener('input', () => {
@@ -374,7 +371,7 @@
     });
   });
 
-  // Highlight the selected offer card
+  // Highlight selected offer
   document.querySelectorAll('.offer').forEach(label => {
     const radio = label.querySelector('input[type=radio]');
     radio.addEventListener('change', () => {
@@ -395,47 +392,32 @@
 
     const data = new FormData(form);
 
-    // Keep a local backup copy too (visible only on this device, as a safety net)
+    // Local backup copy
     try {
       const record = Object.fromEntries(data.entries());
       record._submittedAt = new Date().toISOString();
       const existing = JSON.parse(localStorage.getItem('orders') || '[]');
       existing.push(record);
       localStorage.setItem('orders', JSON.stringify(existing));
-    } catch (err) { /* ignore storage errors */ }
-
-    if (FORMSPREE_ENDPOINT.includes('YOUR_FORM_ID')) {
-      // No email endpoint configured yet — still let the demo proceed to thank-you page
-      orderSubmitted = true;
-      redirectToThankYou();
-      return;
-    }
+    } catch (err) {}
 
     submitBtn.disabled = true;
     submitBtn.textContent = 'Submitting...';
 
     try {
-      const res = await fetch(FORMSPREE_ENDPOINT, {
-        method: 'POST',
-        body: data,
-        headers: { 'Accept': 'application/json' }
-      });
-      if (res.ok) {
-        orderSubmitted = true;
-        redirectToThankYou();
-      } else {
-        throw new Error('Submission failed');
-      }
+      const ok = await postToWeb3Forms(data);
+      if (!ok) throw new Error('Submission failed');
+      orderSubmitted = true;
+      redirectToThankYou();
     } catch (err) {
-      // Network issue (or Formspree unreachable): queue it so it auto-retries next visit,
-      // but still take them to the thank-you page since we captured their order.
+      // Queue for auto-retry on next visit, but still send them to the thank-you page
       try {
         const record = Object.fromEntries(data.entries());
         record._queuedAt = new Date().toISOString();
         const pending = JSON.parse(localStorage.getItem('pendingOrders') || '[]');
         pending.push(record);
         localStorage.setItem('pendingOrders', JSON.stringify(pending));
-      } catch (storageErr) { /* ignore */ }
+      } catch (storageErr) {}
 
       orderSubmitted = true;
       redirectToThankYou();
